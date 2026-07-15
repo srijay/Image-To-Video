@@ -258,7 +258,7 @@ SCHEDULER_MAP = {
 }
 
 pipe = WanImageToVideoPipeline.from_pretrained(
-    "TestOrganizationPleaseIgnore/WAMU_v2_WAN2.2_I2V_LIGHTNING",
+    "TestOrganizationPleaseIgnore/WAMU_v3_WAN2.2_I2V_LIGHTNING",
     torch_dtype=torch.bfloat16,
 ).to('cuda')
 original_scheduler = copy.deepcopy(pipe.scheduler)
