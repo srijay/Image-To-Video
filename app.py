@@ -368,7 +368,7 @@ def get_inference_duration(
     progress
 ):
     BASE_FRAMES_HEIGHT_WIDTH = 81 * 832 * 624
-    BASE_STEP_DURATION = 5.
+    BASE_STEP_DURATION = 15
     width, height = resized_image.size
     factor = num_frames * width * height / BASE_FRAMES_HEIGHT_WIDTH
     step_duration = BASE_STEP_DURATION * factor ** 1.5
