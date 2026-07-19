@@ -387,6 +387,13 @@ def get_inference_duration(
     if safe_mode:
         total_time = total_time * 1.3
 
+    # Cap the reserved GPU duration so the reported reservation (×2 for xlarge)
+    # stays under free-tier ZeroGPU's ~300s per-call limit. The padded worst-case
+    # estimate ran 3-10x the real p90 (~107s) and tripped "The requested GPU
+    # duration (…) is larger than the maximum allowed". 140 → ~280s reported,
+    # still covers p90 and matches the caller's 150s hard timeout. Lower to
+    # 130/120 if the cap turns out stricter than 300s.
+    total_time = min(total_time, 140)
     return total_time
     
 
