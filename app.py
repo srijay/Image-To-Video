@@ -11,10 +11,11 @@ import time
 import gc
 import uuid
 from tqdm import tqdm
-
 import cv2
 import numpy as np
 import torch
+import torch._dynamo
+from huggingface_hub import list_models
 from torch.nn import functional as F
 from PIL import Image
 
@@ -126,10 +127,10 @@ def interpolate_bits(frames_np, multiplier=2, scale=1.0):
     """
     Interpolation maintaining Numpy Float 0-1 format.
     Args:
-        frames_np: Numpy Array (Time, Height, Width, Channels) - Float32[0.0, 1.0]
+        frames_np: Numpy Array (Time, Height, Width, Channels) - Float32 [0.0, 1.0]
         multiplier: int (2, 4, 8)
     Returns:
-        List of Numpy Arrays (Height, Width, Channels) - Float32[0.0, 1.0]
+        List of Numpy Arrays (Height, Width, Channels) - Float32 [0.0, 1.0]
     """
     
     # Handle input shape
@@ -175,7 +176,7 @@ def interpolate_bits(frames_np, multiplier=2, scale=1.0):
 
     def make_inference(I0, I1, n):
         if rife_model.version >= 3.9:
-            res =[]
+            res = []
             for i in range(n):
                 res.append(rife_model.inference(I0, I1, (i+1) * 1. / (n+1), scale))
             return res
@@ -186,11 +187,11 @@ def interpolate_bits(frames_np, multiplier=2, scale=1.0):
             first_half = make_inference(I0, middle, n=n//2)
             second_half = make_inference(middle, I1, n=n//2)
             if n % 2:
-                return[*first_half, middle, *second_half]
+                return [*first_half, middle, *second_half]
             else:
-                return[*first_half, *second_half]
+                return [*first_half, *second_half]
 
-    output_frames =[]
+    output_frames = []
 
     # Process Frames
     # Load first frame into GPU
@@ -231,8 +232,27 @@ def interpolate_bits(frames_np, multiplier=2, scale=1.0):
 
 # WAN
 
-MODEL_ID = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+ORG_NAME = "TestOrganizationPleaseIgnore"
+# MODEL_ID = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+MODEL_ID = os.getenv("REPO_ID") or "TestOrganizationPleaseIgnore/WAMU_v3_WAN2.2_I2V_LIGHTNING"
 CACHE_DIR = os.path.expanduser("~/.cache/huggingface/")
+
+LORA_MODELS = [
+    # {
+    #     "repo_id": "exampleuser/example_lora_1",
+    #     "high_tr": "example_lora_1_high.safetensors",
+    #     "low_tr": "example_lora_1_low.safetensors",
+    #     "high_scale": 0.5,
+    #     "low_scale": 0.5
+    # },
+    # {
+    #     "repo_id": "exampleuser/example_lora_2",
+    #     "high_tr": "subfolder/example_lora_2_high.safetensors",
+    #     "low_tr": "subfolder/example_lora_2_low.safetensors",
+    #     "high_scale": 0.4,
+    #     "low_scale": 0.4
+    # },
+]
 
 MAX_DIM = 832
 MIN_DIM = 480
@@ -242,7 +262,7 @@ MAX_SEED = np.iinfo(np.int32).max
 
 FIXED_FPS = 16
 MIN_FRAMES_MODEL = 8
-MAX_FRAMES_MODEL = 160
+MAX_FRAMES_MODEL = 1280
 
 MIN_DURATION = round(MIN_FRAMES_MODEL / FIXED_FPS, 1)
 MAX_DURATION = round(MAX_FRAMES_MODEL / FIXED_FPS, 1)
@@ -258,10 +278,42 @@ SCHEDULER_MAP = {
 }
 
 pipe = WanImageToVideoPipeline.from_pretrained(
-    "TestOrganizationPleaseIgnore/WAMU_v3_WAN2.2_I2V_LIGHTNING",
+    MODEL_ID,
     torch_dtype=torch.bfloat16,
 ).to('cuda')
 original_scheduler = copy.deepcopy(pipe.scheduler)
+
+for i, lora in enumerate(LORA_MODELS):
+    name_high_tr = lora["high_tr"].split(".")[0].split("/")[-1] + "Hh"
+    name_low_tr = lora["low_tr"].split(".")[0].split("/")[-1] + "Ll"
+    
+    try: 
+        pipe.load_lora_weights(
+            lora["repo_id"],
+            weight_name=lora["high_tr"],
+            adapter_name=name_high_tr
+        )
+    
+        kwargs_lora = {"load_into_transformer_2": True}
+        pipe.load_lora_weights(
+            lora["repo_id"],
+            weight_name=lora["low_tr"],
+            adapter_name=name_low_tr,
+            **kwargs_lora
+        )
+    
+        pipe.set_adapters([name_high_tr, name_low_tr], adapter_weights=[1.0, 1.0])
+    
+        pipe.fuse_lora(adapter_names=[name_high_tr], lora_scale=lora["high_scale"], components=["transformer"])
+        pipe.fuse_lora(adapter_names=[name_low_tr], lora_scale=lora["low_scale"], components=["transformer_2"])
+    
+        pipe.unload_lora_weights()
+
+        print(f"Applied: {lora['high_tr']}, hs={lora['high_scale']}/ls={lora['low_scale']}, {i+1}/{len(LORA_MODELS)}") 
+    except Exception as e:
+        print("Error:", str(e))
+        print("Failed LoRA:", name_high_tr)
+        pipe.unload_lora_weights()
 
 # if os.path.exists(CACHE_DIR):
 #     shutil.rmtree(CACHE_DIR)
@@ -292,10 +344,13 @@ default_prompt_i2v = "make this image come alive, cinematic motion, smooth anima
 default_negative_prompt = "色调艳丽, 过曝, 静态, 细节模糊不清, 字幕, 风格, 作品, 画作, 画面, 静止, 整体发灰, 最差质量, 低质量, JPEG压缩残留, 丑陋的, 残缺的, 多余的手指, 画得不好的手部, 画得不好的脸部, 畸形的, 毁容的, 形态畸形的肢体, 手指融合, 静止不动的画面, 杂乱的背景, 三条腿, 背景人很多, 倒着走"
 
 
+def model_title():
+    repo_name = MODEL_ID.split('/')[-1].replace("_", " ")
+    url = f"https://huggingface.co/{MODEL_ID}"
+    return f"## This space is currently running [{repo_name}]({url}) 🐢"
+
+
 def resize_image(image: Image.Image) -> Image.Image:
-    """
-    Resizes an image to fit within the model's constraints, preserving aspect ratio as much as possible.
-    """
     width, height = image.size
     if width == height:
         return image.resize((SQUARE_DIM, SQUARE_DIM), Image.LANCZOS)
@@ -331,7 +386,6 @@ def resize_image(image: Image.Image) -> Image.Image:
 
 
 def resize_and_crop_to_match(target_image, reference_image):
-    """Resizes and center-crops the target image to match the reference image's dimensions."""
     ref_width, ref_height = reference_image.size
     target_width, target_height = target_image.size
     scale = max(ref_width / target_width, ref_height / target_height)
@@ -385,17 +439,14 @@ def get_inference_duration(
 
     total_time = 15 + gen_time
     if safe_mode:
-        total_time = total_time * 1.3
+        total_time = total_time * 1.30
 
-    # Cap the reserved GPU duration so the reported reservation (×2 for xlarge)
-    # stays under free-tier ZeroGPU's ~300s per-call limit. The padded worst-case
-    # estimate ran 3-10x the real p90 (~107s) and tripped "The requested GPU
-    # duration (…) is larger than the maximum allowed". 145 → ~290s reported,
-    # still covers p90 and matches the caller's 150s hard timeout. Revert to 140
-    # if the cap turns out stricter than 300s.
+    # Cap reserved GPU duration so the reported reservation (×2 for xlarge) stays
+    # under free-tier ZeroGPU's ~300s per-call limit — the padded worst-case was
+    # tripping "requested GPU duration larger than the maximum allowed". 140 →
+    # ~280s reported, still covers real p90 (~107s) and the 150s caller timeout.
     total_time = min(total_time, 145)
     return total_time
-    
 
 
 @spaces.GPU(duration=get_inference_duration, size='xlarge')
@@ -414,7 +465,7 @@ def run_inference(
     frame_multiplier,
     quality,
     duration_seconds,
-    safe_mode,
+    safe_mode=False,
     progress=gr.Progress(track_tqdm=True),
 ):
     scheduler_class = SCHEDULER_MAP.get(scheduler_name)
@@ -429,7 +480,7 @@ def run_inference(
     clear_vram()
 
     task_name = str(uuid.uuid4())[:8]
-    print(f"Task: {task_name}, {duration_seconds}, {resized_image.size}, FM={frame_multiplier}")
+    print(f"Generating {num_frames} frames, task: {task_name}, {duration_seconds}, {resized_image.size}")
     start = time.time()
     result = pipe(
         image=resized_image,
@@ -445,6 +496,7 @@ def run_inference(
         generator=torch.Generator(device="cuda").manual_seed(current_seed),
         output_type="np" 
     )
+    print("gen time passed:", time.time() - start)
     
     raw_frames_np = result.frames[0]  # Returns (T, H, W, C) float32
     pipe.scheduler = original_scheduler
@@ -452,9 +504,11 @@ def run_inference(
     frame_factor = frame_multiplier // FIXED_FPS
     if frame_factor > 1:
         start = time.time()
+        print(f"Processing frames (RIFE Multiplier: {frame_factor}x)...")
         rife_model.device()
         rife_model.flownet = rife_model.flownet.half()
         final_frames = interpolate_bits(raw_frames_np, multiplier=int(frame_factor))
+        print("Interpolation time passed:", time.time() - start)
     else:
         final_frames = list(raw_frames_np)
 
@@ -468,6 +522,7 @@ def run_inference(
         pbar.update(2)
         export_to_video(final_frames, video_path, fps=final_fps, quality=quality)
         pbar.update(1)
+    print(f"Export time passed, {final_fps} FPS:", time.time() - start)
 
     return video_path, task_name
 
@@ -487,8 +542,8 @@ def generate_video(
     scheduler="UniPCMultistep",
     flow_shift=6.0,
     frame_multiplier=16,
-    video_component=True,
     safe_mode=False,
+    video_component=True,
     progress=gr.Progress(track_tqdm=True),
 ):
     """
@@ -565,7 +620,6 @@ def generate_video(
         safe_mode,
         progress,
     )
-
     print(f"GPU complete: {task_n}")
 
     return (video_path if video_component else None), video_path, current_seed
@@ -585,9 +639,9 @@ CSS = """
 """
 
 
-with gr.Blocks(theme=gr.themes.Soft(), css=CSS, delete_cache=(3600, 3700)) as demo:
-    gr.Markdown("## Wan 2.2 I2V (14B) — Fast ⚡")
-    gr.Markdown("Run Wan 2.2 in just 4-8 steps, fp8 quantization & AoT compilation - compatible with 🧨 diffusers and ZeroGPU.")
+with gr.Blocks(delete_cache=(3600, 10800)) as demo:
+    gr.Markdown(model_title())
+    gr.Markdown("Run Wan 2.2 in just 4-8 steps, fp8 quantization & AoT compilation - compatible with 🧨 diffusers and ZeroGPU")
 
     with gr.Row():
         with gr.Column():
@@ -603,7 +657,7 @@ with gr.Blocks(theme=gr.themes.Soft(), css=CSS, delete_cache=(3600, 3700)) as de
             safe_mode_checkbox = gr.Checkbox(
                 label="🛠️ Safe Mode",
                 value=True,
-                info="Safe Mode: Requests 30% extra processing time to try to prevent unfinished tasks when the server is busy."
+                info="Requests 30% extra processing time to try to prevent unfinished tasks when the server is busy."
             )
             with gr.Accordion("Advanced Settings", open=False):
                 last_image_component = gr.Image(type="pil", label="Last Image (Optional)", sources=["upload", "clipboard"])
@@ -622,12 +676,17 @@ with gr.Blocks(theme=gr.themes.Soft(), css=CSS, delete_cache=(3600, 3700)) as de
                 )
                 flow_shift_slider = gr.Slider(minimum=0.5, maximum=15.0, step=0.1, value=3.0, label="Flow Shift")
                 play_result_video = gr.Checkbox(label="Display result", value=True, interactive=True)
+                gr.Markdown(f"[ZeroGPU help, tips and troubleshooting](https://huggingface.co/datasets/{ORG_NAME}/help/blob/main/gpu_help.md)")
+                gr.Markdown(  # TestOrganizationPleaseIgnore/wamu-tools
+                    "To use a different model, **duplicate this Space** first, then change the `REPO_ID` environment variable. "
+                    "[See compatible models here](https://huggingface.co/models?other=diffusers:WanImageToVideoPipeline&sort=trending&search=WAN2.2_I2V_LIGHTNING)."
+                )
 
             generate_button = gr.Button("Generate Video", variant="primary")
 
         with gr.Column():
             # ASSIGNED elem_id="generated-video" so JS can find it
-            video_output = gr.Video(label="Generated Video", autoplay=True, sources=["upload"], show_download_button=True, show_share_button=True, interactive=False, elem_id="generated-video")
+            video_output = gr.Video(label="Generated Video", autoplay=True, sources=["upload"], buttons=["download", "share"], interactive=True, elem_id="generated-video")
             
             # --- Frame Grabbing UI ---
             with gr.Row():
@@ -637,12 +696,13 @@ with gr.Blocks(theme=gr.themes.Soft(), css=CSS, delete_cache=(3600, 3700)) as de
             
             file_output = gr.File(label="Download Video")
 
-    ui_inputs =[
+    ui_inputs = [
         input_image_component, last_image_component, prompt_input, steps_slider,
         negative_prompt_input, duration_seconds_input,
         guidance_scale_input, guidance_scale_2_input, seed_input, randomize_seed_checkbox,
         quality_slider, scheduler_dropdown, flow_shift_slider, frame_multi,
-        play_result_video, safe_mode_checkbox
+        safe_mode_checkbox,
+        play_result_video
     ]
     
     generate_button.click(
@@ -670,6 +730,6 @@ with gr.Blocks(theme=gr.themes.Soft(), css=CSS, delete_cache=(3600, 3700)) as de
 if __name__ == "__main__":
     demo.queue().launch(
         mcp_server=True,
-        ssr_mode=False,
+        css=CSS,
         show_error=True,
     )
