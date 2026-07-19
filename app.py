@@ -238,20 +238,16 @@ MODEL_ID = os.getenv("REPO_ID") or "TestOrganizationPleaseIgnore/WAMU_v3_WAN2.2_
 CACHE_DIR = os.path.expanduser("~/.cache/huggingface/")
 
 LORA_MODELS = [
-    # {
-    #     "repo_id": "exampleuser/example_lora_1",
-    #     "high_tr": "example_lora_1_high.safetensors",
-    #     "low_tr": "example_lora_1_low.safetensors",
-    #     "high_scale": 0.5,
-    #     "low_scale": 0.5
-    # },
-    # {
-    #     "repo_id": "exampleuser/example_lora_2",
-    #     "high_tr": "subfolder/example_lora_2_high.safetensors",
-    #     "low_tr": "subfolder/example_lora_2_low.safetensors",
-    #     "high_scale": 0.4,
-    #     "low_scale": 0.4
-    # },
+    # Official lightx2v 4-step distill applied to the base Wan2.2-I2V-A14B (set via
+    # REPO_ID) — the "vanilla" lightning path (cleaner anatomy than the WAMU VFX
+    # merge). high_noise -> transformer, low_noise -> transformer_2.
+    {
+        "repo_id": "lightx2v/Wan2.2-Distill-Loras",
+        "high_tr": "wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors",
+        "low_tr": "wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors",
+        "high_scale": 1.0,
+        "low_scale": 1.0,
+    },
 ]
 
 MAX_DIM = 832
