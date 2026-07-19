@@ -237,18 +237,7 @@ ORG_NAME = "TestOrganizationPleaseIgnore"
 MODEL_ID = os.getenv("REPO_ID") or "TestOrganizationPleaseIgnore/WAMU_v3_WAN2.2_I2V_LIGHTNING"
 CACHE_DIR = os.path.expanduser("~/.cache/huggingface/")
 
-LORA_MODELS = [
-    # Official lightx2v 4-step distill applied to the base Wan2.2-I2V-A14B (set via
-    # REPO_ID) — the "vanilla" lightning path (cleaner anatomy than the WAMU VFX
-    # merge). high_noise -> transformer, low_noise -> transformer_2.
-    {
-        "repo_id": "lightx2v/Wan2.2-Distill-Loras",
-        "high_tr": "wan2.2_i2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors",
-        "low_tr": "wan2.2_i2v_A14b_low_noise_lora_rank64_lightx2v_4step_1022.safetensors",
-        "high_scale": 1.0,
-        "low_scale": 1.0,
-    },
-]
+LORA_MODELS = []   # WAMU is a pre-merged lightning model — no extra LoRA needed
 
 MAX_DIM = 832
 MIN_DIM = 480
