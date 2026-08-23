@@ -398,7 +398,7 @@ def get_inference_duration(
     
 
 
-@spaces.GPU(duration=get_inference_duration, size='xlarge')
+@spaces.GPU(duration=get_inference_duration)
 def run_inference(
     resized_image,
     processed_last_image,
