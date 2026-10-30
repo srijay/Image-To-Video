@@ -1,0 +1,8 @@
+models/
+video_gen/
+__pycache__/
+*.pyc
+download-model.log
+vendor/
+outputs/
+.DS_Store
